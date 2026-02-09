@@ -10,8 +10,8 @@ sqlalchemy==2.0.23
 # pymysql==1.1.0  # MySQL
 
 # Data validation and settings
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic==2.4.2
+pydantic-settings==2.0.3
 
 # Environment management
 python-dotenv==1.0.0
