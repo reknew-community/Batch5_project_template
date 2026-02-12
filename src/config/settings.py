@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseSettings, validator
+from pydantic_settings import BaseSettings
+from pydantic import field_validator
+
 
 
 class Settings(BaseSettings):
@@ -21,6 +23,9 @@ class Settings(BaseSettings):
     # Paths
     BASE_DIR: Path = Path(__file__).parent.parent.parent
     DATA_DIR: Path = BASE_DIR / "data"
+    PEOPLE_FILE: Path = DATA_DIR / "raw" / "people.csv"
+    RELATIONSHIPS_FILE: Path = DATA_DIR / "raw" / "relationships.csv"
+    GRAPH_NAME: str = "family_graph"
     
     # Security
     SECRET_KEY: str = "your-secret-key-change-this"
@@ -34,7 +39,7 @@ class Settings(BaseSettings):
     # External APIs (optional)
     API_KEY: Optional[str] = None
     
-    @validator("DATA_DIR", pre=True)
+    @field_validator("DATA_DIR", mode="before")
     def create_data_dir(cls, v):
         """Create data directory if it doesn't exist."""
         if isinstance(v, str):
