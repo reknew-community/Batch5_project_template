@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     
     # External APIs (optional)
     API_KEY: Optional[str] = None
+    GEMINI_API_KEY: str 
     
     @field_validator("DATA_DIR", mode="before")
     def create_data_dir(cls, v):

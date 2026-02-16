@@ -30,10 +30,19 @@ def load_people(r):
         CREATE (:Person {{
             person_id: '{row.person_id}',
             first_name: '{row.first_name}',
+            middle_name: '{row.middle_name}',
             last_name: '{row.last_name}',
-            gender: '{row.gender}',
+            full_name:'{row.full_name}',
+            maiden_name:'{row.maiden_name}',
             born_year: {row.born_year},
-            age: {row.age}
+            died:'{row.died}',
+            age: {row.age},
+            gender: '{row.gender}',
+            ethnicity_1:'{row.ethnicity_1}',
+            ethnicity_2:'{row.ethnicity_2}',
+            ethnicity_3:'{row.ethnicity_3}',
+            ethnicity_4:'{row.ethnicity_4}',
+            notes:'{row.notes}'
         }})
         """
         run_query(r, query)
