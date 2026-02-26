@@ -6,13 +6,11 @@ from src.models.relationship import RelationshipPathResponse
 from src.services.graph_service import (
     build_ancestor_tree,
     build_descendant_tree,
-    build_full_tree,
     get_person,
     get_children,
     get_parents,
     search_person_by_name,
-    get_siblings,
-    get_relationship_path,
+    get_siblings
 )
 
 router = APIRouter(prefix="/family", tags=["Family"])
@@ -40,25 +38,6 @@ def search(name: str):
 def siblings(person_id: str):
     return get_siblings(person_id)
 
-
-@router.get("/relationship/{person_a_id}/{person_b_id}",
-            response_model=RelationshipPathResponse)
-def relationship(person_a_id: str, person_b_id: str):
-
-    result = get_relationship_path(person_a_id, person_b_id)
-
-
-    if not result:
-        raise HTTPException(status_code=404,
-                            detail="No relationship found")
-    
-
-    return {
-        "from_person": person_a_id,
-        "to_person": person_b_id,
-        "nodes": result["nodes"],
-        "relationships": result["relationships"]
-    }
 
 @router.get("/descendants/{person_id}")
 def get_descendants_tree(person_id: str,depth: int = 2):

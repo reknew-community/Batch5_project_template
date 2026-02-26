@@ -1,6 +1,8 @@
 from fastapi import HTTPException
 from src.utils.redis_client import get_redis_connection
 import re
+from redisgraph import Graph
+from redis import Redis
 
 GRAPH_NAME = "family_graph"
 
@@ -64,7 +66,8 @@ def get_parents(person_id: str):
 def search_person_by_name(name: str):
     query = f"""
     MATCH (p:Person)
-    WHERE toLower(p.full_name) CONTAINS toLower('{name}')
+    WHERE toLower(p.full_name) CONTAINS toLower('{name}') 
+    OR toLower(p.maiden_name) CONTAINS toLower('{name}')
     RETURN p
     """
     return run_query(query)
@@ -79,71 +82,6 @@ def get_siblings(person_id: str):
     """
     return run_query(query)
 
-def get_relationship_path(person_a_id: str, person_b_id: str):
-    query = f"""
-    MATCH (a:Person {{person_id: '{person_a_id}'}}),
-          (b:Person {{person_id: '{person_b_id}'}})
-    MATCH path = (a)-[*1..6]-(b)
-    RETURN path
-    LIMIT 1
-    """
-
-    r = get_redis_connection()
-    result = r.execute_command("GRAPH.QUERY", GRAPH_NAME, query)
-
-    if not result or len(result) < 2:
-        return None
-
-    rows = result[1]
-    if not rows:
-        return None
-
-    path_string = rows[0][0]
-
-    # Extract IDs
-    node_ids = list(map(int, re.findall(r'\((\d+)\)', path_string)))
-    rel_ids = list(map(int, re.findall(r'\[(\d+)\]', path_string)))
-
-    nodes = []
-    relationships = []
-
-    # Fetch node properties
-    for node_id in node_ids:
-        node_query = f"""
-        MATCH (n)
-        WHERE ID(n) = {node_id}
-        RETURN n
-        """
-        node_result = r.execute_command("GRAPH.QUERY", GRAPH_NAME, node_query)
-
-        if node_result and len(node_result) > 1 and node_result[1]:
-            record = node_result[1][0][0]
-            props = {}
-            for item in record:
-                if item[0] == "properties":
-                    for prop in item[1]:
-                        props[prop[0]] = prop[1]
-            nodes.append(props)
-
-    # Fetch relationship types
-    for rel_id in rel_ids:
-        rel_query = f"""
-        MATCH ()-[r]->()
-        WHERE ID(r) = {rel_id}
-        RETURN type(r)
-        """
-        rel_result = r.execute_command("GRAPH.QUERY", GRAPH_NAME, rel_query)
-
-        if rel_result and len(rel_result) > 1 and rel_result[1]:
-            relationships.append(rel_result[1][0][0])
-
-    return {
-        "from_person": person_a_id,
-        "to_person": person_b_id,
-        "nodes": nodes,
-        "relationships": relationships
-    }
-    
 def build_descendant_tree(person_id: str,depth: int = 2):
     """
     Recursively builds descendant tree using CHILD_OF relationships.
@@ -212,68 +150,127 @@ def build_ancestor_tree(person_id: str, depth: int):
         "person": person,
         "parents": parent_trees
     }
-def build_full_tree(person_id: str, depth: int, include_spouse=False, visited=None, is_root=True):
 
-    if visited is None:
-        visited = set()
+def build_children_graph(person_id: str):
+    parent = get_person(person_id)
+    children = get_children(person_id)
 
-    # Prevent cycles
-    if person_id in visited:
-        return None
+    nodes = []
+    edges = []
 
-    visited.add(person_id)
+    # Add parent node
+    nodes.append({
+        "id": parent["person_id"],
+        "label": parent["full_name"],
+        "gender": parent["gender"]
+    })
 
-    person = get_person(person_id)
-
-    if depth == 0:
-        return {
-            "person": person,
-            "parents": [],
-            "children": [],
-            "spouse": []
-        }
-
-    # ---------- Parents ----------
-    parent_query = f"""
-    MATCH (p:Person {{person_id: '{person_id}'}})-[:CHILD_OF]->(parent)
-    RETURN parent
-    """
-    parents = run_query(parent_query)
-
-    parent_trees = []
-    for parent in parents:
-        subtree = build_full_tree(
-            parent["person_id"],
-            depth - 1,
-            include_spouse,
-            visited,
-            is_root=False
-        )
-        if subtree:
-            parent_trees.append(subtree)
-
-    # ---------- Children ----------
-    child_query = f"""
-    MATCH (child:Person)-[:CHILD_OF]->(p:Person {{person_id: '{person_id}'}})
-    RETURN child
-    """
-    children = run_query(child_query)
-
-    child_trees = []
+    # Add child nodes + edges
     for child in children:
-        subtree = build_full_tree(
-            child["person_id"],
-            depth - 1,
-            include_spouse,
-            visited,
-            is_root=False
-        )
-        if subtree:
-            child_trees.append(subtree)
+        nodes.append({
+            "id": child["person_id"],
+            "label": child["full_name"],
+            "gender": child["gender"]
+        })
 
-    # ---------- Spouse (Root Only) ----------
-    spouse_trees = []
-    if include_spouse and is_root:
+        edges.append({
+            "source": child["person_id"],
+            "target": parent["person_id"],
+            "type": "CHILD_OF"
+        })
+
+    return {
+        "nodes": nodes,
+        "edges": edges
+    }
+
+def get_semantic_subgraph(root_id: str, depth: int = 2):
+    nodes = {}
+    edges = []
+    edge_set = set()
+    visited = set()
+
+    queue = [(root_id, 0)]
+
+    while queue:
+        person_id, level = queue.pop(0)
+
+        if person_id in visited:
+            continue
+
+        visited.add(person_id)
+
+        person = get_person(person_id)
+        if not person:
+            continue
+
+        if person_id not in nodes:
+            nodes[person_id] = {
+                "id": person["person_id"],
+                "label": person["full_name"],
+                "gender": person.get("gender")
+            }
+
+        if level < depth:
+            # ── Parents ──────────────────────────────────────
+            parent_query = f"""
+            MATCH (p:Person {{person_id: '{person_id}'}})-[:CHILD_OF]->(parent)
+            RETURN parent
+            """
+            parents = run_query(parent_query)
+
+            for parent in parents:
+                parent_id = parent["person_id"]
+
+                if parent_id not in nodes:
+                    nodes[parent_id] = {
+                        "id": parent["person_id"],
+                        "label": parent["full_name"],
+                        "gender": parent.get("gender")
+                    }
+
+                edge_key = (person_id, parent_id, "CHILD_OF")
+                if edge_key not in edge_set:
+                    edge_set.add(edge_key)
+                    edges.append({
+                        "source": person_id,
+                        "target": parent_id,
+                        "type": "CHILD_OF"
+                    })
+
+                if parent_id not in visited:
+                    queue.append((parent_id, level + 1))
+
+            # ── Children ─────────────────────────────────────
+            child_query = f"""
+            MATCH (child:Person)-[:CHILD_OF]->(p:Person {{person_id: '{person_id}'}})
+            RETURN child
+            """
+            children = run_query(child_query)
+
+            for child in children:
+                child_id = child["person_id"]
+
+                if child_id not in nodes:
+                    nodes[child_id] = {
+                        "id": child["person_id"],
+                        "label": child["full_name"],
+                        "gender": child.get("gender")
+                    }
+
+                edge_key = (child_id, person_id, "CHILD_OF")
+                if edge_key not in edge_set:
+                    edge_set.add(edge_key)
+                    edges.append({
+                        "source": child_id,
+                        "target": person_id,
+                        "type": "CHILD_OF"
+                    })
+
+                if child_id not in visited:
+                    queue.append((child_id, level + 1))
+
+        # ── Spouse (always, at any depth) ────────────────────
         spouse_query = f"""
         MATCH (p:Person {{person_id: '{person_id}'}})-[:SPOUSE]-(s)
         RETURN s
@@ -281,20 +278,104 @@ def build_full_tree(person_id: str, depth: int, include_spouse=False, visited=No
         spouses = run_query(spouse_query)
 
         for spouse in spouses:
-            spouse_trees.append({
-                "person": spouse,
-                "parents": [],
-                "children": [],
-                "spouse": []
-            })
+            spouse_id = spouse["person_id"]
+
+            if spouse_id not in nodes:
+                nodes[spouse_id] = {
+                    "id": spouse["person_id"],
+                    "label": spouse["full_name"],
+                    "gender": spouse.get("gender")
+                }
+
+            source = min(person_id, spouse_id)
+            target = max(person_id, spouse_id)
+            edge_key = (source, target, "SPOUSE")
+            if edge_key not in edge_set:
+                edge_set.add(edge_key)
+                edges.append({
+                    "source": source,
+                    "target": target,
+                    "type": "SPOUSE"
+                })
 
     return {
-        "person": person,
-        "parents": parent_trees,
-        "children": child_trees,
-        "spouse": spouse_trees
+        "nodes": list(nodes.values()),
+        "edges": edges
     }
 
+def get_relationship_graph(person_a_id: str, person_b_id: str):
 
+    redis_conn = get_redis_connection()
+    graph = Graph(GRAPH_NAME, redis_conn)
+
+    query = f"""
+    MATCH (a:Person {{person_id: '{person_a_id}'}}),
+          (b:Person {{person_id: '{person_b_id}'}})
+
+    CALL algo.SPpaths({{
+        sourceNode: a,
+        targetNode: b,
+        relTypes: ["CHILD_OF", "SPOUSE"],
+        relDirection: "both",
+        maxLen: 6,
+        pathCount: 1
+    }})
+    YIELD path
+
+    RETURN path
+    """
+
+    result = graph.query(query)
+
+    print(f"[DEBUG] result_set: {result.result_set}")
+
+    if not result.result_set or not result.result_set[0]:
+        return None
+
+    path = result.result_set[0][0]
+
+    nodes = path.nodes()
+    edges = path.edges()
+
+    node_lookup = {node.id: node for node in nodes}
+
+    ordered_nodes = []
+    ordered_edges = []
+
+    for node in nodes:
+        ordered_nodes.append({
+            "id": node.properties["person_id"],
+            "label": node.properties.get("full_name"),
+            "gender": node.properties.get("gender"),
+            "born_year": node.properties.get("born_year")
+        })
+
+    for edge in edges:
+        src_node = node_lookup.get(edge.src_node)
+        dest_node = node_lookup.get(edge.dest_node)
+
+        if not src_node or not dest_node:
+            continue
+
+        ordered_edges.append({
+            "source": src_node.properties["person_id"],
+            "target": dest_node.properties["person_id"],
+            "type": edge.relation
+        })
+
+    return {
+        "nodes": ordered_nodes,
+        "edges": ordered_edges,
+        "pathPattern": [rel["type"] for rel in ordered_edges]
+    }
 if __name__ == "__main__":
-   print(get_person("P00001"))
+    # graph = get_relationship_graph("P00001", "P00011")
+    print("get person")
+    graph = get_person("P00011")
+    print(graph)
+    print("Semantic Sub graph")
+    graph =get_semantic_subgraph("P00011",2)
+    print(graph)
+    print("children of a person")
+    graph =get_children("P00011")
+    print(graph)

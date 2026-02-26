@@ -64,16 +64,34 @@ TOOLS = [
     Tool(
         function_declarations=[
             FunctionDeclaration(
-                name="get_siblings",
-                description="Get siblings of a person",
+                name="get_relationship_graph",
+                description="Get relathionship path of two person",
                 parameters=Schema(
                     type="object",
                     properties={
-                        "person_id": Schema(type="string")
+                        "person_a_id": Schema(type="string"),
+                        "person_b_id": Schema(type="string")
                     },
-                    required=["person_id"]
+                    required=["person_a_id","person_b_id"]
                 )
             )
         ]
     ),
+    Tool(
+        function_declarations = [
+            FunctionDeclaration(
+                name="get_semantic_subgraph",
+                description="Get semantic sub tree graph for a person given person_id and depth",
+                parameters=Schema(
+                    type="object",
+                    properties={
+                        "person_id": Schema(type="string"),
+                        "depth": Schema(type="integer")
+                    },
+                    required=["person_id", "depth"]
+                )
+            )
+        ]
+    ),
+    
 ]
