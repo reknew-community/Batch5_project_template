@@ -12,6 +12,7 @@ from src.services.graph_service import (
     search_person_by_name,
     get_siblings
 )
+from src.models.response_models import WrapperResponse
 
 router = APIRouter(prefix="/family", tags=["Family"])
 
@@ -30,7 +31,9 @@ def children(person_id: str):
 def parents(person_id: str):
     return get_parents(person_id)
 
-@router.get("/search", response_model=List[Person])
+
+
+@router.get("/search", response_model=WrapperResponse)
 def search(name: str):
     return search_person_by_name(name)
 

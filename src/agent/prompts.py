@@ -38,6 +38,7 @@ STRICT RULES — YOU MUST FOLLOW THESE:
 6. For relationship questions → ALWAYS call get_relationship_graph.
 7. If search_person returns multiple results, pick the closest name match.
 8. Do not call the same tool twice with the same arguments.
+9. Id's of any person should not be provided to the use until asked for or required.
 
 ------------------------------------------------------------
 DEPTH RULES (for get_semantic_subgraph):

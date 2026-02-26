@@ -6,7 +6,33 @@ from redis import Redis
 
 GRAPH_NAME = "family_graph"
 
+def format_person_node(person):
+    return {
+        "id": person["person_id"],
+        "label": person["full_name"],
+        "gender": person.get("gender")
+    }
 
+def build_graph_from_center(center_person, related_people, relation_type=None):
+    nodes = []
+    edges = []
+
+    nodes.append(format_person_node(center_person))
+
+    for person in related_people:
+        nodes.append(format_person_node(person))
+
+        if relation_type:
+            edges.append({
+                "source": person["person_id"],
+                "target": center_person["person_id"],
+                "type": relation_type
+            })
+
+    return {
+        "nodes": nodes,
+        "edges": edges
+    }
 def run_query(query: str):
     r = get_redis_connection()
     result = r.execute_command("GRAPH.QUERY", GRAPH_NAME, query)
@@ -45,23 +71,99 @@ def get_person(person_id: str):
     if len(results) == 0:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    return results[0]
+    person = results[0]
+
+    return {
+        "data": person,
+        "graph": {
+            "nodes": [{
+                "id": person["person_id"],
+                "label": person["full_name"],
+                "gender": person.get("gender")
+            }],
+            "edges": []
+        }
+    }
 
 
 def get_children(person_id: str):
+    parent_result = get_person(person_id)
+    parent = parent_result["data"]
+
     query = f"""
     MATCH (p:Person {{person_id: '{person_id}'}})<-[:CHILD_OF]-(child)
     RETURN child
     """
-    return run_query(query)
+    children =  run_query(query)
+    nodes = []
+    edges = []
+
+    nodes.append({
+        "id": parent["person_id"],
+        "label": parent["full_name"],
+        "gender": parent.get("gender")
+    })
+
+    for child in children:
+        nodes.append({
+            "id": child["person_id"],
+            "label": child["full_name"],
+            "gender": child.get("gender")
+        })
+
+        edges.append({
+            "source": child["person_id"],
+            "target": parent["person_id"],
+            "type": "CHILD_OF"
+        })
+
+    return {
+        "data": children,
+        "graph": {
+            "nodes": nodes,
+            "edges": edges
+        }
+    }
 
 
 def get_parents(person_id: str):
+    child_result = get_person(person_id)
+    child = child_result["data"]
     query = f"""
     MATCH (c:Person {{person_id: '{person_id}'}})-[:CHILD_OF]->(parent)
     RETURN parent
     """
-    return run_query(query)
+    parents = run_query(query)
+
+    nodes = []
+    edges = []
+
+    nodes.append({
+        "id": child["person_id"],
+        "label": child["full_name"],
+        "gender": child.get("gender")
+    })
+
+    for parent in parents:
+        nodes.append({
+            "id": parent["person_id"],
+            "label": parent["full_name"],
+            "gender": parent.get("gender")
+        })
+
+        edges.append({
+            "source": child["person_id"],
+            "target": parent["person_id"],
+            "type": "CHILD_OF"
+        })
+
+    return {
+        "data": parents,
+        "graph": {
+            "nodes": nodes,
+            "edges": edges
+        }
+    }
 
 def search_person_by_name(name: str):
     query = f"""
@@ -70,7 +172,22 @@ def search_person_by_name(name: str):
     OR toLower(p.maiden_name) CONTAINS toLower('{name}')
     RETURN p
     """
-    return run_query(query)
+    results =  run_query(query)
+    nodes = []
+    for person in results:
+        nodes.append({
+            "id": person["person_id"],
+            "label": person["full_name"],
+            "gender": person.get("gender")
+        })
+
+    return {
+        "data": results,
+        "graph": {
+            "nodes": nodes,
+            "edges": []
+        }
+    }
 
 def get_siblings(person_id: str):
     query = f"""
@@ -200,9 +317,12 @@ def get_semantic_subgraph(root_id: str, depth: int = 2):
 
         visited.add(person_id)
 
-        person = get_person(person_id)
-        if not person:
+        # 🔹 FIX: unwrap get_person result
+        person_result = get_person(person_id)
+        if not person_result:
             continue
+
+        person = person_result["data"]
 
         if person_id not in nodes:
             nodes[person_id] = {
@@ -270,7 +390,7 @@ def get_semantic_subgraph(root_id: str, depth: int = 2):
                 if child_id not in visited:
                     queue.append((child_id, level + 1))
 
-        # ── Spouse (always, at any depth) ────────────────────
+        # ── Spouse (always) ────────────────────────────────
         spouse_query = f"""
         MATCH (p:Person {{person_id: '{person_id}'}})-[:SPOUSE]-(s)
         RETURN s
@@ -289,6 +409,7 @@ def get_semantic_subgraph(root_id: str, depth: int = 2):
 
             source = min(person_id, spouse_id)
             target = max(person_id, spouse_id)
+
             edge_key = (source, target, "SPOUSE")
             if edge_key not in edge_set:
                 edge_set.add(edge_key)
@@ -298,9 +419,13 @@ def get_semantic_subgraph(root_id: str, depth: int = 2):
                     "type": "SPOUSE"
                 })
 
+    # 🔹 IMPORTANT: wrap final return for consistency
     return {
-        "nodes": list(nodes.values()),
-        "edges": edges
+        "data": None,
+        "graph": {
+            "nodes": list(nodes.values()),
+            "edges": edges
+        }
     }
 
 def get_relationship_graph(person_a_id: str, person_b_id: str):
@@ -330,7 +455,10 @@ def get_relationship_graph(person_a_id: str, person_b_id: str):
     print(f"[DEBUG] result_set: {result.result_set}")
 
     if not result.result_set or not result.result_set[0]:
-        return None
+        return {
+        "data": None,
+        "graph": None
+    }
 
     path = result.result_set[0][0]
 
@@ -364,10 +492,14 @@ def get_relationship_graph(person_a_id: str, person_b_id: str):
         })
 
     return {
-        "nodes": ordered_nodes,
-        "edges": ordered_edges,
+    "data": {
         "pathPattern": [rel["type"] for rel in ordered_edges]
+    },
+    "graph": {
+        "nodes": ordered_nodes,
+        "edges": ordered_edges
     }
+}
 if __name__ == "__main__":
     # graph = get_relationship_graph("P00001", "P00011")
     print("get person")
