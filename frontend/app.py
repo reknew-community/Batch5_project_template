@@ -38,7 +38,7 @@ st.markdown("""
         font-family: 'Libre Baskerville', Georgia, serif;
         font-size: 42px;
         font-weight: 600;
-        color: #f5c542;
+        color: #ffa500;
         letter-spacing: 0.06em;
         text-align: center;
         margin-bottom: 4px;
@@ -101,7 +101,7 @@ st.markdown("""
 
 st.markdown("""
 <div class='main-title'>🌳 Family Knowledge Graph</div>
-<div class='main-subtitle'>Explore · Discover · Connect</div>
+<div class='main-subtitle'>Explore · Discover</div>
 """, unsafe_allow_html=True)
 
 mode = st.radio("Choose Mode", ["Browse Family", "Ask AI"], horizontal=True)
@@ -671,16 +671,21 @@ if mode == "Browse Family":
                         st.error(f"API Error {res.status_code}: {res.text}")
                     else:
                         results = res.json()
-                        if not isinstance(results, list):
+
+                        if not isinstance(results, dict) or "data" not in results:
                             st.error("Unexpected API response")
-                        elif not results:
-                            st.warning("No results found.")
-                            st.session_state.search_results = []
                         else:
-                            st.session_state.search_results  = results
-                            st.session_state.selected_person = None
-                            st.session_state.graph_data      = None
-                            st.session_state.ai_answer       = None
+                            people = results.get("data", [])
+                            graph  = results.get("graph")
+
+                            if not people:
+                                st.warning("No results found.")
+                                st.session_state.search_results = []
+                            else:
+                                st.session_state.search_results  = people
+                                st.session_state.graph_data      = graph
+                                st.session_state.selected_person = None
+                                st.session_state.ai_answer       = None
                 except requests.exceptions.ConnectionError:
                     st.error("Cannot connect to backend at " + BACKEND_URL + ". Is it running?")
                 except Exception as e:
